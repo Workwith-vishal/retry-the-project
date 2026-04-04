@@ -38,38 +38,65 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setChatMessages(prev => [...prev, msg]);
   }, []);
 
-  const uploadCSV = useCallback(async (file: File) => {
-    return new Promise<void>((resolve, reject) => {
-      Papa.parse(file, {
-        header: true,
-        dynamicTyping: true,
-        skipEmptyLines: true,
-        complete: (results) => {
-          const rows = results.data as Record<string, any>[];
-          const fields = results.meta.fields || [];
+  const parseRows = useCallback((rows: Record<string, any>[], fields: string[], fileName: string) => {
+    const columns = fields.map(name => ({
+      name,
+      type: inferType(rows.slice(0, 20).map(r => String(r[name] ?? ''))),
+      sample: rows.slice(0, 3).map(r => String(r[name] ?? '')),
+    }));
 
-          const columns = fields.map(name => ({
-            name,
-            type: inferType(rows.slice(0, 20).map(r => String(r[name] ?? ''))),
-            sample: rows.slice(0, 3).map(r => String(r[name] ?? '')),
-          }));
-
-          const ds: Dataset = {
-            id: `upload-${Date.now()}`,
-            name: file.name.replace('.csv', ''),
-            columns: columns as Dataset['columns'],
-            rows,
-            uploadedAt: new Date(),
-            rowCount: rows.length,
-          };
-
-          setDataset(ds);
-          resolve();
-        },
-        error: (err) => reject(err),
-      });
-    });
+    const ds: Dataset = {
+      id: `upload-${Date.now()}`,
+      name: fileName.replace(/\.(csv|xlsx|xls|json)$/i, ''),
+      columns: columns as Dataset['columns'],
+      rows,
+      uploadedAt: new Date(),
+      rowCount: rows.length,
+    };
+    setDataset(ds);
   }, []);
+
+  const uploadFile = useCallback(async (file: File) => {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+
+    if (ext === 'csv') {
+      return new Promise<void>((resolve, reject) => {
+        Papa.parse(file, {
+          header: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete: (results) => {
+            const rows = results.data as Record<string, any>[];
+            const fields = results.meta.fields || [];
+            parseRows(rows, fields, file.name);
+            resolve();
+          },
+          error: (err) => reject(err),
+        });
+      });
+    }
+
+    if (ext === 'json') {
+      const text = await file.text();
+      let parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) parsed = [parsed];
+      const fields = Object.keys(parsed[0] || {});
+      parseRows(parsed, fields, file.name);
+      return;
+    }
+
+    if (ext === 'xlsx' || ext === 'xls') {
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet);
+      const fields = Object.keys(rows[0] || {});
+      parseRows(rows, fields, file.name);
+      return;
+    }
+
+    throw new Error('Unsupported file type');
+  }, [parseRows]);
 
   const loadDemo = useCallback(() => {
     setDataset(generateDemoData());
