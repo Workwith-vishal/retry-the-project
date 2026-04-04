@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import { Dataset, ChatMessage, generateDemoData } from '@/lib/data-store';
 import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 
 interface DataContextType {
   dataset: Dataset | null;
