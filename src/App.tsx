@@ -8,6 +8,7 @@ import AppLayout from "@/components/layout/AppLayout";
 import Index from "./pages/Index";
 import UploadPage from "./pages/UploadPage";
 import ChatPage from "./pages/ChatPage";
+import DataTablePage from "./pages/DataTablePage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
