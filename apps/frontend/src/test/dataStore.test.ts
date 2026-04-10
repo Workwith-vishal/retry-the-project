@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Dataset, generateDemoCharts, generateDemoKPIs } from "@/features/data/model/dataStore";
+import { Dataset, generateAnalyticsHealthSummary, generateDemoCharts, generateDemoKPIs } from "@/features/data/model/dataStore";
 
 describe("dataStore dashboard helpers", () => {
   it("builds charts for arbitrary uploaded datasets without demo-only columns", () => {
@@ -254,6 +254,80 @@ describe("dataStore dashboard helpers", () => {
         { Board: "ICSE", count: 2 },
         { Board: "State Board", count: 2 },
       ],
+    });
+  });
+
+  it("excludes branch groups below the minimum sample threshold", () => {
+    const dataset: Dataset = {
+      id: "branch-threshold-1",
+      name: "Branch Threshold",
+      uploadedAt: new Date("2026-04-10T00:00:00.000Z"),
+      rowCount: 5,
+      columns: [
+        { name: "Branch", type: "string", sample: ["CSE", "ECE"] },
+        { name: "Marks[10th]", type: "number", sample: ["91", "88"] },
+      ],
+      rows: [
+        { Branch: "CSE", "Marks[10th]": "91" },
+        { Branch: "CSE", "Marks[10th]": "95" },
+        { Branch: "ECE", "Marks[10th]": "88" },
+        { Branch: "IT", "Marks[10th]": "85" },
+        { Branch: "IT", "Marks[10th]": "87" },
+      ],
+    };
+
+    const charts = generateDemoCharts(dataset);
+
+    expect(charts[0]).toMatchObject({
+      title: "Average Marks[10th] by Branch",
+      data: [
+        { Branch: "CSE", "Marks[10th]": 93 },
+        { Branch: "IT", "Marks[10th]": 86 },
+      ],
+    });
+  });
+
+  it("builds analytics health summary from sanitized data", () => {
+    const dataset: Dataset = {
+      id: "health-summary-1",
+      name: "Health Summary",
+      uploadedAt: new Date("2026-04-10T00:00:00.000Z"),
+      rowCount: 6,
+      columns: [
+        { name: "Branch", type: "string", sample: ["CSE", "ECE"] },
+        { name: "Marks[10th]", type: "number", sample: ["91", "88"] },
+      ],
+      rows: [
+        { Branch: "CSE", "Marks[10th]": "91" },
+        { Branch: "CSE", "Marks[10th]": "95" },
+        { Branch: "ECE", "Marks[10th]": "88" },
+        { Branch: "IT", "Marks[10th]": "87" },
+        { Branch: "", "Marks[10th]": "not available" },
+        { Branch: "", "Marks[10th]": null },
+      ],
+    };
+
+    const summary = generateAnalyticsHealthSummary(dataset);
+
+    expect(summary).toMatchObject({
+      integrity: {
+        totalRows: 6,
+        analyticsRows: 5,
+        removedEmptyRows: 1,
+        invalidNumericValues: 1,
+      },
+      risk: {
+        level: "LOW",
+        metricName: "Marks[10th]",
+        average: 90.25,
+        threshold: 60,
+      },
+      branchCoverage: {
+        totalGroups: 3,
+        includedGroups: 1,
+        excludedGroups: 2,
+        minimumGroupCount: 2,
+      },
     });
   });
 });

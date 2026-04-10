@@ -2,6 +2,7 @@ const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const preferredNumericColumns = ["salary_usd", "salary", "compensation", "income", "pay", "revenue", "sales", "amount", "units_sold", "units", "profit_margin", "customer_rating"];
 const preferredDimensionColumns = ["month", "date", "category", "region", "segment", "country", "education", "company_size"];
 const nonAdditiveMetricHints = ["margin", "rate", "ratio", "percent", "percentage", "rating", "score", "mark", "marks", "grade", "gpa", "cgpa"];
+const branchMinimumGroupCount = 2;
 
 const toNumber = (value) => {
   if (value == null) return null;
@@ -190,6 +191,84 @@ const includesPhrase = (source, phrase) => {
   return (` ${source} `).includes(` ${phrase} `);
 };
 
+const isMeaningfulValue = (value) => {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  return true;
+};
+
+const prepareDatasetForAnalytics = (dataset) => {
+  const numericColumns = dataset.columns.filter((column) => column.type === "number");
+  const sanitizedRows = [];
+  let removedEmptyRows = 0;
+  let invalidNumericValues = 0;
+
+  dataset.rows.forEach((row) => {
+    const hasMeaningfulField = dataset.columns.some((column) => isMeaningfulValue(row[column.name]));
+    if (!hasMeaningfulField) {
+      removedEmptyRows += 1;
+      return;
+    }
+
+    const nextRow = { ...row };
+    numericColumns.forEach((column) => {
+      const rawValue = row[column.name];
+      const numericValue = toNumber(rawValue);
+
+      if (numericValue == null) {
+        if (isMeaningfulValue(rawValue)) {
+          invalidNumericValues += 1;
+        }
+        nextRow[column.name] = null;
+        return;
+      }
+
+      nextRow[column.name] = numericValue;
+    });
+
+    sanitizedRows.push(nextRow);
+  });
+
+  if (removedEmptyRows > 0 || invalidNumericValues > 0) {
+    console.info("[analytics] integrity validation", {
+      totalRows: dataset.rows.length,
+      analyticsRows: sanitizedRows.length,
+      removedEmptyRows,
+      invalidNumericValues,
+    });
+  }
+
+  return {
+    ...dataset,
+    rows: sanitizedRows,
+    rowCount: sanitizedRows.length,
+  };
+};
+
+const getMinimumGroupCount = (dimensionColumn) =>
+  normalizeText(dimensionColumn.name).includes("branch") ? branchMinimumGroupCount : 1;
+
+const filterGroupedEntries = (entries, dimensionColumn, metricColumn) => {
+  const minimumGroupCount = getMinimumGroupCount(dimensionColumn);
+  if (minimumGroupCount <= 1) {
+    return entries;
+  }
+
+  const filteredEntries = entries.filter(([, entry]) => entry.count >= minimumGroupCount);
+  const excludedGroups = entries.length - filteredEntries.length;
+
+  if (excludedGroups > 0) {
+    console.info("[analytics] group threshold validation", {
+      dimension: dimensionColumn.name,
+      metric: metricColumn?.name ?? "count",
+      minimumGroupCount,
+      excludedGroups,
+    });
+  }
+
+  return filteredEntries;
+};
+
 const logAverageValidation = ({ metricName, dimensionName, includedValues, skippedInvalidValues, skippedEmptyLabels, groupCount }) => {
   console.info("[analytics] average validation", {
     metric: metricName,
@@ -229,7 +308,8 @@ const groupMetricByDimension = (rows, dimensionColumn, metricColumn, aggregation
     includedValues += 1;
   });
 
-  const series = sortLabels([...grouped.keys()], dimensionColumn.type).map((label) => {
+  const groupedEntries = filterGroupedEntries([...grouped.entries()], dimensionColumn, metricColumn);
+  const series = sortLabels(groupedEntries.map(([label]) => label), dimensionColumn.type).map((label) => {
     const entry = grouped.get(label) ?? { sum: 0, count: 0 };
     const value = aggregation === "average" && entry.count > 0 ? entry.sum / entry.count : entry.sum;
 
@@ -262,7 +342,13 @@ const countRowsByDimension = (rows, dimensionColumn, valueKey = "count") => {
     grouped.set(label, (grouped.get(label) ?? 0) + 1);
   });
 
-  return sortLabels([...grouped.keys()], dimensionColumn.type).map((label) => ({
+  const groupedEntries = filterGroupedEntries(
+    [...grouped.entries()].map(([label, count]) => [label, { count }]),
+    dimensionColumn,
+    null,
+  );
+
+  return sortLabels(groupedEntries.map(([label]) => label), dimensionColumn.type).map((label) => ({
     [dimensionColumn.name]: label,
     [valueKey]: grouped.get(label) ?? 0,
   }));
@@ -529,19 +615,21 @@ const buildInsightsFromSchema = (schema, plan) => {
 };
 
 export const createChatResponse = (dataset, query) => {
+  const analyticsDataset = prepareDatasetForAnalytics(dataset);
+
   if (isGreetingQuery(query)) {
     return {
       content: "Hello, how can I help you?",
       sql: null,
       chart: null,
       insights: [],
-      schema: buildDatasetSchema(dataset),
+      schema: buildDatasetSchema(analyticsDataset),
     };
   }
 
-  const schema = buildDatasetSchema(dataset);
-  const plan = buildAnalysisPlan(dataset, schema, query);
-  const chart = materializePlan(dataset, plan);
+  const schema = buildDatasetSchema(analyticsDataset);
+  const plan = buildAnalysisPlan(analyticsDataset, schema, query);
+  const chart = materializePlan(analyticsDataset, plan);
 
   let content = `I analyzed the ${schema.datasetName} schema and used it to select an appropriate ${chart?.type ?? "summary"} view.`;
   if (plan.mode === "countMatchingValues" && plan.dimension && Array.isArray(plan.matchValues) && chart?.data?.length) {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, Filter } from 'lucide-react';
 import { useData } from '@/features/data/context/useData';
-import { Dataset, generateDemoCharts, generateDemoKPIs } from '@/features/data/model/dataStore';
+import { Dataset, generateAnalyticsHealthSummary, generateDemoCharts, generateDemoKPIs } from '@/features/data/model/dataStore';
 import AnalyticsChart from '@/features/dashboard/components/AnalyticsChart';
 import {
   Select,
@@ -52,6 +52,10 @@ const AnalyticsPage = () => {
 
   const charts = useMemo(() => (analyticsDataset ? generateDemoCharts(analyticsDataset) : []), [analyticsDataset]);
   const kpis = useMemo(() => (analyticsDataset ? generateDemoKPIs(analyticsDataset) : []), [analyticsDataset]);
+  const analyticsHealth = useMemo(
+    () => (analyticsDataset ? generateAnalyticsHealthSummary(analyticsDataset) : null),
+    [analyticsDataset],
+  );
 
   const downloadDossier = () => {
     if (!analyticsDataset) return;
@@ -120,11 +124,30 @@ const AnalyticsPage = () => {
       <section className="space-y-4">
         <h2 className="text-3xl uppercase tracking-[0.08em] text-foreground">4.1 Dimensional Overview</h2>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {kpis.slice(0, 4).map((kpi, index) => (
-            <div key={kpi.label} className="terminal-panel p-6">
-              <p className="terminal-label">{index === 0 ? 'Sigma Variance' : index === 1 ? 'Outlier Count' : index === 2 ? 'Confidence Score' : 'Data Velocity'}</p>
+          {analyticsHealth && [
+            {
+              label: 'Integrity Rows',
+              value: `${analyticsHealth.integrity.analyticsRows}/${analyticsHealth.integrity.totalRows}`,
+            },
+            {
+              label: 'Anomaly Count',
+              value: String(analyticsHealth.integrity.removedEmptyRows + analyticsHealth.integrity.invalidNumericValues),
+            },
+            {
+              label: 'Risk Indicator',
+              value: analyticsHealth.risk.level,
+            },
+            {
+              label: 'Branch Coverage',
+              value: analyticsHealth.branchCoverage.totalGroups > 0
+                ? `${analyticsHealth.branchCoverage.includedGroups}/${analyticsHealth.branchCoverage.totalGroups}`
+                : 'N/A',
+            },
+          ].map((item) => (
+            <div key={item.label} className="terminal-panel p-6">
+              <p className="terminal-label">{item.label}</p>
               <p className="mt-4 text-4xl uppercase tracking-[0.08em] text-foreground">
-                {index === 2 ? '98.2' : index === 3 ? 'High' : kpi.value}
+                {item.value}
               </p>
             </div>
           ))}
@@ -142,15 +165,23 @@ const AnalyticsPage = () => {
             <div className="mt-6 space-y-6 border-t border-border pt-6 text-base leading-8 text-muted-foreground">
               <div className="flex gap-4">
                 <AlertTriangle className="mt-1 h-5 w-5 text-accent" />
-                <p>Higher education bands show a stronger salary lift in the current uploaded dataset.</p>
+                <p>
+                  {analyticsHealth?.risk.metricName
+                    ? `${analyticsHealth.risk.rule}. Current average is ${analyticsHealth.risk.average ?? 'N/A'} and the indicator is ${analyticsHealth.risk.level}.`
+                    : 'Risk indicator is unavailable because this dataset does not contain a numeric metric.'}
+                </p>
               </div>
               <div className="flex gap-4">
                 <AlertTriangle className="mt-1 h-5 w-5 text-accent" />
-                <p>Skill-stack columns contain multi-value tags, so direct comparison should be treated as composite category analysis.</p>
+                <p>
+                  Analytics excluded {analyticsHealth?.branchCoverage.excludedGroups ?? 0} branch group(s) below the minimum sample size of {analyticsHealth?.branchCoverage.minimumGroupCount ?? 0}.
+                </p>
               </div>
               <div className="flex gap-4">
                 <CheckCircle2 className="mt-1 h-5 w-5 text-success" />
-                <p>Compensation remains the clearest primary metric, with experience acting as a supporting explanatory variable.</p>
+                <p>
+                  Data integrity checks removed {analyticsHealth?.integrity.removedEmptyRows ?? 0} empty row(s) and flagged {analyticsHealth?.integrity.invalidNumericValues ?? 0} invalid numeric value(s) before analytics ran.
+                </p>
               </div>
             </div>
             <button className="terminal-button mt-8 w-full justify-center">Run AI Correlation Test</button>

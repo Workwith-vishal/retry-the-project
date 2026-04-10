@@ -48,6 +48,28 @@ export interface ChatMessage {
   timestamp: Date;
 }
 
+export interface AnalyticsHealthSummary {
+  integrity: {
+    totalRows: number;
+    analyticsRows: number;
+    removedEmptyRows: number;
+    invalidNumericValues: number;
+  };
+  risk: {
+    level: "HIGH" | "LOW";
+    metricName: string | null;
+    average: number | null;
+    threshold: number | null;
+    rule: string;
+  };
+  branchCoverage: {
+    totalGroups: number;
+    includedGroups: number;
+    excludedGroups: number;
+    minimumGroupCount: number;
+  };
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const PREFERRED_NUMERIC_COLUMNS = [
   "salary_usd",
@@ -65,6 +87,7 @@ const PREFERRED_NUMERIC_COLUMNS = [
 ];
 const PREFERRED_DIMENSION_COLUMNS = ["month", "date", "category", "region", "segment", "country"];
 const NON_ADDITIVE_METRIC_HINTS = ["margin", "rate", "ratio", "percent", "percentage", "rating", "score", "mark", "marks", "grade", "gpa", "cgpa"];
+const BRANCH_MINIMUM_GROUP_COUNT = 2;
 type MetricAggregation = "sum" | "average";
 
 const toNumber = (value: DatasetCellValue | undefined): number | null => {
@@ -213,6 +236,129 @@ const logAverageValidation = ({
   });
 };
 
+const isMeaningfulValue = (value: DatasetCellValue | undefined) => {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  return true;
+};
+
+const prepareDatasetForAnalytics = (data: Dataset) => {
+  const numericColumns = getNumericColumns(data);
+  const sanitizedRows: DatasetRow[] = [];
+  let removedEmptyRows = 0;
+  let invalidNumericValues = 0;
+
+  data.rows.forEach((row) => {
+    const hasMeaningfulField = data.columns.some((column) => isMeaningfulValue(row[column.name]));
+    if (!hasMeaningfulField) {
+      removedEmptyRows += 1;
+      return;
+    }
+
+    const nextRow: DatasetRow = { ...row };
+    numericColumns.forEach((column) => {
+      const rawValue = row[column.name];
+      const numericValue = toNumber(rawValue);
+
+      if (numericValue == null) {
+        if (isMeaningfulValue(rawValue)) {
+          invalidNumericValues += 1;
+        }
+        nextRow[column.name] = null;
+        return;
+      }
+
+      nextRow[column.name] = numericValue;
+    });
+
+    sanitizedRows.push(nextRow);
+  });
+
+  if (removedEmptyRows > 0 || invalidNumericValues > 0) {
+    console.info("[analytics] integrity validation", {
+      totalRows: data.rows.length,
+      analyticsRows: sanitizedRows.length,
+      removedEmptyRows,
+      invalidNumericValues,
+    });
+  }
+
+  return {
+    dataset: {
+      ...data,
+      rows: sanitizedRows,
+      rowCount: sanitizedRows.length,
+    },
+    integrity: {
+      totalRows: data.rows.length,
+      analyticsRows: sanitizedRows.length,
+      removedEmptyRows,
+      invalidNumericValues,
+    },
+  };
+};
+
+const getMinimumGroupCount = (dimensionColumn: DataColumn) =>
+  normalizeText(dimensionColumn.name).includes("branch") ? BRANCH_MINIMUM_GROUP_COUNT : 1;
+
+const filterGroupedEntries = (
+  entries: Array<[string, { count: number }]>,
+  dimensionColumn: DataColumn,
+  metricName: string,
+) => {
+  const minimumGroupCount = getMinimumGroupCount(dimensionColumn);
+  if (minimumGroupCount <= 1) {
+    return entries;
+  }
+
+  const filteredEntries = entries.filter(([, entry]) => entry.count >= minimumGroupCount);
+  const excludedGroups = entries.length - filteredEntries.length;
+
+  if (excludedGroups > 0) {
+    console.info("[analytics] group threshold validation", {
+      dimension: dimensionColumn.name,
+      metric: metricName,
+      minimumGroupCount,
+      excludedGroups,
+    });
+  }
+
+  return filteredEntries;
+};
+
+const calculateAverage = (values: number[]) =>
+  values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+
+const calculateMedian = (values: number[]) => {
+  if (values.length === 0) return 0;
+  const sortedValues = [...values].sort((left, right) => left - right);
+  const middleIndex = Math.floor(sortedValues.length / 2);
+
+  if (sortedValues.length % 2 === 0) {
+    return (sortedValues[middleIndex - 1] + sortedValues[middleIndex]) / 2;
+  }
+
+  return sortedValues[middleIndex];
+};
+
+const fixedRiskThresholdForMetric = (metricName: string) => {
+  const normalized = metricName.toLowerCase();
+
+  if (normalized.includes("gpa") || normalized.includes("cgpa")) return 6;
+  if (normalized.includes("rating")) return 3;
+  if (
+    normalized.includes("mark")
+    || normalized.includes("marks")
+    || normalized.includes("score")
+    || normalized.includes("grade")
+    || normalized.includes("percent")
+  ) {
+    return 60;
+  }
+
+  return null;
+};
+
 const dedupeCharts = (charts: ChartConfig[]) => {
   const seen = new Set<string>();
 
@@ -288,7 +434,8 @@ const groupMetricByDimension = (
     includedValues += 1;
   });
 
-  const series = sortLabels([...grouped.keys()], dimensionColumn.type).map((label) => ({
+  const groupedEntries = filterGroupedEntries([...grouped.entries()], dimensionColumn, metricColumn.name);
+  const series = sortLabels(groupedEntries.map(([label]) => label), dimensionColumn.type).map((label) => ({
     [dimensionColumn.name]: label,
     [metricColumn.name]: Number(
       (
@@ -328,7 +475,13 @@ const countRowsByDimension = (rows: DatasetRow[], dimensionColumn: DataColumn, v
     grouped.set(label, (grouped.get(label) ?? 0) + 1);
   });
 
-  return sortLabels([...grouped.keys()], dimensionColumn.type).map((label) => ({
+  const groupedEntries = filterGroupedEntries(
+    [...grouped.entries()].map(([label, count]) => [label, { count }]),
+    dimensionColumn,
+    valueKey,
+  );
+
+  return sortLabels(groupedEntries.map(([label]) => label), dimensionColumn.type).map((label) => ({
     [dimensionColumn.name]: label,
     [valueKey]: grouped.get(label) ?? 0,
   }));
@@ -423,8 +576,9 @@ export const generateDemoData = (): Dataset => {
 };
 
 export const generateDemoKPIs = (data: Dataset): KPI[] => {
-  const numericColumns = getNumericColumns(data);
-  const dimensionColumns = getDimensionColumns(data);
+  const { dataset: analyticsDataset } = prepareDatasetForAnalytics(data);
+  const numericColumns = getNumericColumns(analyticsDataset);
+  const dimensionColumns = getDimensionColumns(analyticsDataset);
   const primaryMetric = pickPrimaryMetric(numericColumns);
   const secondaryMetric = pickSecondaryMetric(numericColumns, primaryMetric);
   const rowCount = data.rowCount || data.rows.length;
@@ -434,7 +588,7 @@ export const generateDemoKPIs = (data: Dataset): KPI[] => {
   ];
 
   if (primaryMetric) {
-    const total = sumColumn(data.rows, primaryMetric.name);
+    const total = sumColumn(analyticsDataset.rows, primaryMetric.name);
     kpis.push({
       label: `Total ${humanize(primaryMetric.name)}`,
       value: formatMetricValue(primaryMetric.name, total),
@@ -443,7 +597,7 @@ export const generateDemoKPIs = (data: Dataset): KPI[] => {
   }
 
   if (secondaryMetric) {
-    const average = averageColumn(data.rows, secondaryMetric.name);
+    const average = averageColumn(analyticsDataset.rows, secondaryMetric.name);
     kpis.push({
       label: `Avg ${humanize(secondaryMetric.name)}`,
       value: formatMetricValue(secondaryMetric.name, average),
@@ -451,7 +605,7 @@ export const generateDemoKPIs = (data: Dataset): KPI[] => {
     });
   } else if (dimensionColumns[0]) {
     const distinctCount = new Set(
-      data.rows
+      analyticsDataset.rows
         .map((row) => toLabel(row[dimensionColumns[0].name]))
         .filter((value): value is string => value !== null),
     ).size;
@@ -467,10 +621,11 @@ export const generateDemoKPIs = (data: Dataset): KPI[] => {
 };
 
 export const generateDemoCharts = (data: Dataset): ChartConfig[] => {
-  const numericColumns = getNumericColumns(data);
-  const dimensionColumns = getDimensionColumns(data);
+  const { dataset: analyticsDataset } = prepareDatasetForAnalytics(data);
+  const numericColumns = getNumericColumns(analyticsDataset);
+  const dimensionColumns = getDimensionColumns(analyticsDataset);
 
-  if (data.rows.length === 0 || numericColumns.length === 0) {
+  if (analyticsDataset.rows.length === 0 || numericColumns.length === 0) {
     return [];
   }
 
@@ -485,7 +640,7 @@ export const generateDemoCharts = (data: Dataset): ChartConfig[] => {
 
   if (primaryDimension && primaryMetric) {
     const primaryAggregation = metricAggregationForColumn(primaryMetric.name);
-    const series = groupMetricByDimension(data.rows, primaryDimension, primaryMetric, primaryAggregation);
+    const series = groupMetricByDimension(analyticsDataset.rows, primaryDimension, primaryMetric, primaryAggregation);
     if (series.length > 0) {
       charts.push({
         type: primaryDimension.name === "month" || primaryDimension.type === "date" ? "area" : "bar",
@@ -503,10 +658,10 @@ export const generateDemoCharts = (data: Dataset): ChartConfig[] => {
       ? primaryMetric
       : numericColumns.find((column) => metricAggregationForColumn(column.name) === "sum");
     const series = shouldUseCountPie
-      ? countRowsByDimension(data.rows, secondaryDimension)
+      ? countRowsByDimension(analyticsDataset.rows, secondaryDimension)
       : pieMetric
-      ? groupMetricByDimension(data.rows, secondaryDimension, pieMetric, "sum")
-      : countRowsByDimension(data.rows, secondaryDimension);
+      ? groupMetricByDimension(analyticsDataset.rows, secondaryDimension, pieMetric, "sum")
+      : countRowsByDimension(analyticsDataset.rows, secondaryDimension);
     if (series.length > 0) {
       charts.push({
         type: series.length <= 6 ? "pie" : "bar",
@@ -524,7 +679,7 @@ export const generateDemoCharts = (data: Dataset): ChartConfig[] => {
 
   if (primaryDimension && secondaryMetric) {
     const secondaryAggregation = metricAggregationForColumn(secondaryMetric.name);
-    const series = groupMetricByDimension(data.rows, primaryDimension, secondaryMetric, secondaryAggregation);
+    const series = groupMetricByDimension(analyticsDataset.rows, primaryDimension, secondaryMetric, secondaryAggregation);
     if (series.length > 0) {
       charts.push({
         type: primaryDimension.type === "date" ? "line" : "bar",
@@ -537,7 +692,7 @@ export const generateDemoCharts = (data: Dataset): ChartConfig[] => {
   }
 
   if (secondaryDimension && primaryMetric) {
-    const averageSeries = groupMetricByDimension(data.rows, secondaryDimension, primaryMetric, "average");
+    const averageSeries = groupMetricByDimension(analyticsDataset.rows, secondaryDimension, primaryMetric, "average");
     if (averageSeries.length > 0) {
       charts.push({
         type: "line",
@@ -550,7 +705,7 @@ export const generateDemoCharts = (data: Dataset): ChartConfig[] => {
   }
 
   if (tertiaryDimension) {
-    const countSeries = countRowsByDimension(data.rows, tertiaryDimension);
+    const countSeries = countRowsByDimension(analyticsDataset.rows, tertiaryDimension);
     if (countSeries.length > 0) {
       charts.push({
         type: countSeries.length <= 6 ? "pie" : "bar",
@@ -563,7 +718,7 @@ export const generateDemoCharts = (data: Dataset): ChartConfig[] => {
   }
 
   if (primaryMetric && secondaryMetric) {
-    const scatterData = data.rows
+    const scatterData = analyticsDataset.rows
       .map((row) => {
         const x = toNumber(row[secondaryMetric.name]);
         const y = toNumber(row[primaryMetric.name]);
@@ -592,7 +747,7 @@ export const generateDemoCharts = (data: Dataset): ChartConfig[] => {
   }
 
   if (charts.length === 0) {
-    const summary = summarizeMetrics(data.rows, numericColumns);
+    const summary = summarizeMetrics(analyticsDataset.rows, numericColumns);
     if (summary.length > 0) {
       charts.push({
         type: "bar",
@@ -605,4 +760,61 @@ export const generateDemoCharts = (data: Dataset): ChartConfig[] => {
   }
 
   return dedupeCharts(charts).slice(0, 6);
+};
+
+export const generateAnalyticsHealthSummary = (data: Dataset): AnalyticsHealthSummary => {
+  const { dataset: analyticsDataset, integrity } = prepareDatasetForAnalytics(data);
+  const numericColumns = getNumericColumns(analyticsDataset);
+  const branchColumn = analyticsDataset.columns.find((column) => normalizeText(column.name).includes("branch"));
+  const riskMetric = numericColumns.find((column) =>
+    ["mark", "marks", "score", "grade", "gpa", "cgpa", "rating"].some((hint) => column.name.toLowerCase().includes(hint)),
+  ) ?? pickPrimaryMetric(numericColumns);
+
+  const riskValues = riskMetric
+    ? analyticsDataset.rows
+        .map((row) => toNumber(row[riskMetric.name]))
+        .filter((value): value is number => value != null)
+    : [];
+  const average = riskValues.length > 0 ? Number(calculateAverage(riskValues).toFixed(2)) : null;
+  const fixedThreshold = riskMetric ? fixedRiskThresholdForMetric(riskMetric.name) : null;
+  const derivedThreshold = riskValues.length > 0 ? Number(calculateMedian(riskValues).toFixed(2)) : null;
+  const threshold = fixedThreshold ?? derivedThreshold;
+  const rule = riskMetric
+    ? fixedThreshold != null
+      ? `HIGH if average ${humanize(riskMetric.name)} is below ${fixedThreshold}`
+      : `HIGH if average ${humanize(riskMetric.name)} is below the dataset median`
+    : "Risk unavailable because no numeric metric was found";
+  const level = average != null && threshold != null && average < threshold ? "HIGH" : "LOW";
+
+  let totalGroups = 0;
+  let includedGroups = 0;
+
+  if (branchColumn) {
+    const branchCounts = new Map<string, number>();
+    analyticsDataset.rows.forEach((row) => {
+      const label = normalizeDimensionLabel(branchColumn.name, row[branchColumn.name]);
+      if (!label) return;
+      branchCounts.set(label, (branchCounts.get(label) ?? 0) + 1);
+    });
+
+    totalGroups = branchCounts.size;
+    includedGroups = [...branchCounts.values()].filter((count) => count >= BRANCH_MINIMUM_GROUP_COUNT).length;
+  }
+
+  return {
+    integrity,
+    risk: {
+      level,
+      metricName: riskMetric?.name ?? null,
+      average,
+      threshold,
+      rule,
+    },
+    branchCoverage: {
+      totalGroups,
+      includedGroups,
+      excludedGroups: Math.max(totalGroups - includedGroups, 0),
+      minimumGroupCount: BRANCH_MINIMUM_GROUP_COUNT,
+    },
+  };
 };
