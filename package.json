@@ -8,14 +8,14 @@
     "apps/backend"
   ],
   "scripts": {
-    "dev": "npm run dev:all",
-    "dev:frontend": "npm run dev --workspace=@insightflow/frontend",
-    "dev:backend": "npm run dev --workspace=@insightflow/backend",
-    "dev:all": "npm run dev:backend & npm run dev:frontend",
-    "build": "npm run build --workspace=@insightflow/frontend",
-    "build:frontend": "npm run build --workspace=@insightflow/frontend",
-    "build:backend": "npm run build --workspace=@insightflow/backend",
-    "lint": "npm run lint --workspace=@insightflow/frontend",
-    "test": "npm run test --workspace=@insightflow/frontend"
+    "dev": "npm run dev -w apps/frontend",
+    "dev:all": "npm run dev -w apps/backend & npm run dev -w apps/frontend",
+    "dev:frontend": "npm run dev -w apps/frontend",
+    "dev:backend": "npm run dev -w apps/backend",
+    "build": "npm run build -w apps/frontend",
+    "build:frontend": "npm run build -w apps/frontend",
+    "build:backend": "npm run build -w apps/backend",
+    "lint": "npm run lint -w apps/frontend",
+    "test": "npm run test -w apps/frontend"
   }
 }
