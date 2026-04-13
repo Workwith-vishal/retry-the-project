@@ -1,52 +1,123 @@
-# Retry The Project
+# InsightFlow
 
-`retry-the-project` is a full-stack workspace for the InsightFlow app: a Vite/React frontend plus a local Node analytics API backed by SQLite.
+A modern analytics dashboard with local AI-style insights and dataset exploration.
 
-## Workspace Layout
+## 📁 Project Structure
 
-```text
-apps/
-  backend/
-    data/        # Local SQLite files, ignored from git
-    src/
-      database/  # Persistence and dataset storage
-      services/  # Analytics and chat response logic
-      server.js  # HTTP server entrypoint
-  frontend/
-    public/      # Static assets
-    src/
-      app/       # App bootstrap, providers, routing
-      features/  # Feature modules
-      shared/    # Reusable UI, hooks, layout, utilities
-      test/      # Frontend tests
-docs/            # Project structure and workspace notes
-scripts/         # Root dev scripts
+```
+insightflow/
+├── apps/
+│   ├── frontend/          # React + Vite frontend application
+│   │   ├── src/
+│   │   │   ├── app/                 # Main app component
+│   │   │   ├── features/            # Feature modules
+│   │   │   │   ├── analytics/       # Analytics feature
+│   │   │   │   ├── chat/            # AI Chat feature
+│   │   │   │   ├── dashboard/       # Dashboard feature
+│   │   │   │   ├── data/            # Data management (api, context, model)
+│   │   │   │   └── upload/          # File upload feature
+│   │   │   ├── shared/              # Shared components
+│   │   │   │   ├── components/      # Reusable UI components
+│   │   │   │   ├── layout/          # Layout components
+│   │   │   │   └── lib/             # Utility libraries
+│   │   │   └── main.tsx             # Entry point
+│   │   ├── public/                  # Static assets
+│   │   ├── package.json             # Frontend dependencies
+│   │   ├── vite.config.ts           # Vite configuration
+│   │   ├── tailwind.config.ts       # Tailwind CSS config
+│   │   └── tsconfig.json            # TypeScript config
+│   │
+│   └── backend/           # Node.js API serverless functions
+│       ├── api/
+│       │   └── index.js               # API route handlers
+│       ├── data/                      # Data storage
+│       ├── package.json               # Backend dependencies
+│       ├── vercel.json                # Vercel config
+│       └── README.md                  # Backend documentation
+│
+├── docs/                  # Project documentation
+├── scripts/               # Build and utility scripts
+│
+├── package.json           # Root workspace config
+├── package-lock.json
+├── vercel.json            # Vercel deployment config
+├── .env.example           # Environment variables template
+├── .gitignore
+├── README.md              # This file
+└── DEPLOY.md              # Deployment guide
 ```
 
-Detailed folder notes live in [docs/PROJECT_STRUCTURE.md](/C:/Users/VISHAL/Desktop/20-12-2025/All_full_stack_preparation/expo/retry-the-project/docs/PROJECT_STRUCTURE.md).
+## 🚀 Quick Start
 
-## Conventions
+### Prerequisites
+- Node.js 18+
+- npm or yarn
 
-- Use `npm` at the workspace root. The repo is standardized on `package-lock.json`.
-- Keep generated build output inside app folders, not at the repo root.
-- Treat `apps/backend/data/` as local runtime state, not source code.
+### Installation
 
-## Start
+```bash
+# Install all dependencies
+npm install
+```
 
-1. Install dependencies:
-   `npm install`
-2. Start both apps:
-   `npm start`
+### Development
 
-URLs:
+```bash
+# Run both frontend and backend
+npm run dev
 
-- Frontend: `http://127.0.0.1:8080`
-- API: `http://127.0.0.1:3001`
+# Run frontend only (port 8080)
+npm run dev:frontend
 
-## Commands
+# Run backend only (port 3001)
+npm run dev:backend
+```
 
-- `npm run start:frontend`: start the frontend only
-- `npm run start:backend`: start the backend only
-- `npm run build`: build the frontend
-- `npm run test`: run the frontend tests
-- `npm run lint`: lint the frontend
+### Build
+
+```bash
+# Build frontend for production
+npm run build
+
+# Build frontend only
+npm run build:frontend
+```
+
+## 📦 Tech Stack
+
+### Frontend
+- **React 18** - UI framework
+- **Vite** - Build tool
+- **TypeScript** - Type safety
+- **TailwindCSS** - Styling
+- **Radix UI** - Component library
+- **Recharts** - Charts
+- **Axios** - HTTP client
+- **TanStack Query** - Data fetching
+
+### Backend
+- **Node.js** - Runtime
+- **sql.js** - SQLite database
+- **Vercel** - Serverless deployment
+
+## 🌐 Deployment
+
+See [DEPLOY.md](./DEPLOY.md) for detailed deployment instructions.
+
+### Quick Deploy
+
+1. Push to GitHub
+2. Connect to Vercel
+3. Deploy `apps/frontend` and `apps/backend` separately
+
+## 📱 Features
+
+- 📊 **Dashboard** - KPI cards and overview charts
+- 📋 **Data Table** - Sortable, filterable data grid
+- 📤 **File Upload** - Upload CSV/Excel files
+- 💬 **AI Chat** - Ask questions about your data
+- 📈 **Analytics** - Correlation analysis and insights
+
+## 📄 License
+
+Private project

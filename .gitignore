@@ -32,3 +32,5 @@ apps/backend/data/
 .env.local
 .env.*.local
 *.env
+
+.vercel
